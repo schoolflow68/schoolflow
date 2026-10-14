@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}วิเคราะห์การเข้าเรียน · SchoolFlow{% endblock %}
+{% block crumb %}ANALYTICS{% endblock %}
+{% block content %}
+<style>
+.analytics .filters{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:12px;align-items:end}
+.analytics .filters .field{min-width:0}
+.analytics .metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;margin:18px 0}
+.analytics .metric{background:#fff;border:1px solid var(--line);border-radius:18px;padding:19px;min-width:0}
+.analytics .metric-label{font-size:12px;color:var(--muted)}.analytics .metric-value{font-size:30px;font-weight:800;margin-top:8px;letter-spacing:-.7px}
+.analytics .metric-note{font-size:11px;color:var(--muted);margin-top:4px}
+.analytics .chart{display:flex;align-items:flex-end;gap:12px;min-height:220px;overflow-x:auto;padding:20px 4px 8px}
+.analytics .bar-item{flex:0 0 48px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:190px;gap:7px}
+.analytics .bar-track{height:145px;width:25px;display:flex;align-items:flex-end;background:#f0f3f8;border-radius:8px;overflow:hidden}
+.analytics .bar{width:100%;background:linear-gradient(180deg,#6b8cff,#365be8);border-radius:7px 7px 2px 2px;min-height:3px}
+.analytics .bar-label{font-size:10px;color:var(--muted);white-space:nowrap}.analytics .bar-count{font-size:11px;font-weight:800}
+.analytics .legend{display:flex;gap:15px;flex-wrap:wrap;font-size:12px;color:var(--muted)}.analytics .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:#365be8}
+.analytics .tablewrap{overflow:auto}.analytics table{width:100%;border-collapse:collapse}.analytics th,.analytics td{text-align:left;padding:12px;border-bottom:1px solid var(--line);white-space:nowrap}.analytics th{font-size:11px;color:var(--muted)}
+@media(max-width:1000px){.analytics .filters{grid-template-columns:repeat(2,minmax(0,1fr))}.analytics .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.analytics .filters{grid-template-columns:1fr}.analytics .metrics{gap:9px}.analytics .metric{padding:14px}.analytics .metric-value{font-size:25px}}
+</style>
+<div class="analytics">
+<div class="pagehead"><div><div class="eyebrow">ATTENDANCE INSIGHTS</div><h1>วิเคราะห์การเข้าเรียน</h1><p>ดูสถิติการเข้า–ออกและการมาสายจากฐานข้อมูลจริง</p></div></div>
+<div class="card"><form class="filters" method="get">
+<div class="field"><label>ตั้งแต่วันที่</label><input type="date" name="start" value="{{ start_date }}" required></div>
+<div class="field"><label>ถึงวันที่</label><input type="date" name="end" value="{{ end_date }}" required></div>
+<div class="field"><label>ห้องเรียน</label><select name="class_id"><option value="">ทุกห้อง</option>{% for c in classes %}<option value="{{ c.id }}" {% if selected_class==c.id %}selected{% endif %}>{{ c.name }}{% if c.room %} · {{ c.room }}{% endif %}</option>{% endfor %}</select></div>
+<div class="field"><label>รายวิชา</label><select name="subject_id"><option value="">ทุกวิชา</option>{% for s in subjects %}<option value="{{ s.id }}" {% if selected_subject==s.id %}selected{% endif %}>{{ s.name }}</option>{% endfor %}</select></div>
+<div class="field"><label>รูปแบบกราฟ</label><select name="period"><option value="day" {% if period=='day' %}selected{% endif %}>รายวัน</option><option value="week" {% if period=='week' %}selected{% endif %}>รายสัปดาห์</option><option value="month" {% if period=='month' %}selected{% endif %}>รายเดือน</option></select></div>
+<div><button type="submit">ใช้ตัวกรอง</button></div>
+</form></div>
+<div class="metrics">
+<div class="metric"><div class="metric-label">รายการเข้าเรียนทั้งหมด</div><div class="metric-value">{{ totals.total or 0 }}</div><div class="metric-note">ตามห้อง วิชา และวันที่เลือก</div></div>
+<div class="metric"><div class="metric-label">มาเรียนตรงเวลา</div><div class="metric-value">{{ totals.present or 0 }}</div><div class="metric-note">มีเวลาเข้าและไม่ถูกระบุว่าสาย</div></div>
+<div class="metric"><div class="metric-label">มาสาย</div><div class="metric-value">{{ totals.late or 0 }}</div><div class="metric-note">นับจากสถานะในระบบ</div></div>
+<div class="metric"><div class="metric-label">บันทึกเวลาออกแล้ว</div><div class="metric-value">{{ totals.checked_out or 0 }}</div><div class="metric-note">มีเวลา check-out</div></div>
+<div class="metric"><div class="metric-label">ยังไม่มีเวลาเข้า</div><div class="metric-value">{{ totals.missing or 0 }}</div><div class="metric-note">รายการที่มีอยู่แต่เวลาเข้าว่าง</div></div>
+</div>
+<div class="card"><div class="cardhead"><h2>แนวโน้มการเข้าเรียน {{ period_label }}</h2><span class="muted">แถบแสดงจำนวนรายการต่อช่วง</span></div>
+{% if daily %}<div class="chart">{% set max_total = daily|map(attribute='total')|max %}{% for d in daily %}<div class="bar-item"><div class="bar-count">{{ d.total }}</div><div class="bar-track"><div class="bar" title="ทั้งหมด {{ d.total }} · ตรงเวลา {{ d.present or 0 }} · สาย {{ d.late or 0 }}" style="height:{{ ((d.total / max_total) * 145) if max_total else 3 }}px"></div></div><div class="bar-label">{{ d.day[5:] if period!='month' else d.day }}</div></div>{% endfor %}</div><div class="legend"><span><i class="dot"></i>จำนวนรายการเข้าเรียน</span><span>มาสายรวม {{ totals.late or 0 }} ครั้ง</span></div>{% else %}<div class="empty">ไม่มีข้อมูลในช่วงวันที่ที่เลือก</div>{% endif %}
+</div>
+<div class="card"><div class="cardhead"><h2>นักเรียนที่มาสายบ่อย</h2><span class="muted">10 อันดับแรกในช่วงที่เลือก</span></div><div class="tablewrap"><table><thead><tr><th>รหัสนักเรียน</th><th>ชื่อ–นามสกุล</th><th>ห้องเรียน</th><th>จำนวนครั้ง</th></tr></thead><tbody>{% for r in frequent_late %}<tr><td>{{ r.student_code }}</td><td>{{ r.full_name }}</td><td>{{ r.class_name or '-' }}</td><td><b>{{ r.late_count }}</b></td></tr>{% else %}<tr><td colspan="4" class="empty">ยังไม่มีข้อมูลการมาสายในช่วงที่เลือก</td></tr>{% endfor %}</tbody></table></div></div>
+<p class="muted" style="font-size:12px;margin:12px 2px">หมายเหตุ: ระบบจะแสดง “ขาดเรียน” ได้อย่างถูกต้องเมื่อมีข้อมูลรายชื่อนักเรียนที่ควรเข้าเรียนในแต่ละคาบครบถ้วน ขณะนี้หน้านี้ไม่ตีความการไม่มีรายการสแกนว่าเป็นการขาดเรียนโดยอัตโนมัติ</p>
+</div>
+{% endblock %}

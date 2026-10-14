@@ -1,0 +1,37 @@
+{% extends "base.html" %}{% block title %}ภาพรวมระบบ · SchoolFlow{% endblock %}{% block crumb %}OVERVIEW{% endblock %}{% block content %}
+<div class="pagehead"><div><div class="eyebrow">Overview / Attendance analytics</div><h1>ภาพรวมระบบ</h1><p>ยินดีต้อนรับ {{ session.get('username') }} · สรุปข้อมูลประจำวันที่ {{ today }}</p></div><a class="btn" href="{{ url_for('fingerprint_scan') }}">◎ &nbsp; เริ่มสแกนลายนิ้วมือ</a></div>
+
+<div class="card" style="margin-bottom:18px">
+  <h2>&#3623;&#3636;&#3594;&#3634;&#3607;&#3637;&#3656;&#3585;&#3635;&#3621;&#3633;&#3591;&#3648;&#3619;&#3637;&#3618;&#3609;</h2>
+  {% if current_subject %}
+    <p>&#3623;&#3636;&#3594;&#3634;&#3611;&#3633;&#3592;&#3592;&#3640;&#3610;&#3633;&#3609;: <b>{{ current_subject.name }}</b></p>
+    <p class="muted">&#3648;&#3621;&#3639;&#3629;&#3585;&#3623;&#3636;&#3594;&#3634;&#3588;&#3619;&#3633;&#3657;&#3591;&#3648;&#3604;&#3637;&#3618;&#3623;&#32;&#3609;&#3633;&#3585;&#3648;&#3619;&#3637;&#3618;&#3609;&#3607;&#3640;&#3585;&#3588;&#3609;&#3651;&#3594;&#3657;&#3623;&#3636;&#3594;&#3634;&#3609;&#3637;&#3657;&#3592;&#3609;&#3585;&#3623;&#3656;&#3634;&#3592;&#3632;&#3592;&#3610;&#3588;&#3634;&#3610;</p>
+    <form method="post">
+      <button class="danger" name="subject_action" value="end">&#3592;&#3610;&#3588;&#3634;&#3610;</button>
+    </form>
+  {% else %}
+    <p class="muted">&#3648;&#3621;&#3639;&#3629;&#3585;&#3623;&#3636;&#3594;&#3634;&#3588;&#3619;&#3633;&#3657;&#3591;&#3648;&#3604;&#3637;&#3618;&#3623;&#32;&#3609;&#3633;&#3585;&#3648;&#3619;&#3637;&#3618;&#3609;&#3607;&#3640;&#3585;&#3588;&#3609;&#3651;&#3594;&#3657;&#3623;&#3636;&#3594;&#3634;&#3609;&#3637;&#3657;&#3592;&#3609;&#3585;&#3623;&#3656;&#3634;&#3592;&#3632;&#3592;&#3610;&#3588;&#3634;&#3610;</p>
+    <form method="post" class="row">
+      <input type="hidden" name="subject_action" value="start">
+      <div class="field">
+        <label>&#3648;&#3621;&#3639;&#3629;&#3585;&#3623;&#3636;&#3594;&#3634;</label>
+        <select name="subject_id" required>
+          <option value="">-- &#3648;&#3621;&#3639;&#3629;&#3585;&#3623;&#3636;&#3594;&#3634; --</option>
+          {% for subject in subject_options %}
+          <option value="{{ subject.id }}">{{ subject.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button class="success" {% if not subject_options %}disabled{% endif %}>&#3648;&#3619;&#3636;&#3656;&#3617;&#3588;&#3634;&#3610;</button>
+    </form>
+  {% endif %}
+</div>
+<div class="grid">
+<div class="card statcard"><div class="stat-top"><span class="statlabel">นักเรียนที่ใช้งาน</span><span class="stat-icon" style="background:#eef0ff;color:#6574f5">♙</span></div><div class="stat">{{ stats.students }}</div><div class="statnote">● ข้อมูลนักเรียนในระบบ</div></div>
+<div class="card statcard"><div class="stat-top"><span class="statlabel">ชั้นเรียนทั้งหมด</span><span class="stat-icon" style="background:#e8faf5;color:#1ca987">▤</span></div><div class="stat">{{ stats.classes }}</div><div class="statnote" style="color:#778195">จัดการห้องเรียนได้จากเมนู</div></div>
+<div class="card statcard"><div class="stat-top"><span class="statlabel">รายวิชา</span><span class="stat-icon" style="background:#fff4e6;color:#d99530">▧</span></div><div class="stat">{{ stats.subjects }}</div><div class="statnote" style="color:#778195">รายการวิชาที่เปิดสอน</div></div>
+<div class="card statcard"><div class="stat-top"><span class="statlabel">รายการเข้าเรียนวันนี้</span><span class="stat-icon" style="background:#e9f5ff;color:#3994d8">◷</span></div><div class="stat">{{ stats.today }}</div><div class="statnote">● อัปเดตจากฐานข้อมูล</div></div>
+</div>
+<div class="card"><div class="cardhead"><div><h2>รายการเข้าเรียนล่าสุด</h2><div class="muted" style="margin-top:5px">ข้อมูลบันทึกของวันนี้</div></div><a class="btn secondary" href="{{ url_for('attendance') }}">ดูประวัติทั้งหมด →</a></div><div class="tablewrap"><table><thead><tr><th>รหัสนักเรียน</th><th>ชื่อ–นามสกุล</th><th>ชั้นเรียน</th><th>รายวิชา</th><th>เวลาเข้า</th><th>เวลาออก</th></tr></thead><tbody>{% for r in recent %}<tr><td><b>{{ r.student_code }}</b></td><td>{{ r.full_name }}</td><td>{{ r.class_name or '-' }}</td><td>{{ r.subject_name or '-' }}</td><td><span class="pill blue">{{ r.check_in or '-' }}</span></td><td>{{ r.check_out or '-' }}</td></tr>{% else %}<tr><td colspan="6" class="empty">ยังไม่มีข้อมูลเข้าเรียนวันนี้</td></tr>{% endfor %}</tbody></table></div></div>
+<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))"><a class="card" style="text-decoration:none;color:inherit;display:flex;align-items:center;gap:14px" href="{{ url_for('students') }}"><span class="stat-icon" style="background:#eef0ff;color:#6574f5">♙</span><span><b>จัดการนักเรียน</b><span class="muted" style="display:block;margin-top:5px">เพิ่มนักเรียนและลงทะเบียนลายนิ้วมือ</span></span><span style="margin-left:auto;color:#6675f4">→</span></a><a class="card" style="text-decoration:none;color:inherit;display:flex;align-items:center;gap:14px" href="{{ url_for('sensor') }}"><span class="stat-icon" style="background:#e8faf5;color:#1ca987">⌁</span><span><b>ตรวจสอบ R307S</b><span class="muted" style="display:block;margin-top:5px">ทดสอบการเชื่อมต่อเซนเซอร์</span></span><span style="margin-left:auto;color:#6675f4">→</span></a></div>
+{% endblock %}

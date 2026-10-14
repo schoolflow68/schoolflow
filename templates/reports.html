@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}รายงานเข้าเรียน · SchoolFlow{% endblock %}
+{% block crumb %}REPORTS{% endblock %}
+{% block content %}
+<div class="pagehead"><div><div class="eyebrow">REPORT CENTER</div><h1>รายงานและส่งออกข้อมูล</h1><p>กรองข้อมูลและดาวน์โหลดเป็น CSV ซึ่งเปิดด้วย Excel ได้</p></div></div>
+<div class="card"><form class="row" method="get">
+<div class="field"><label>ตั้งแต่วันที่</label><input type="date" name="start" value="{{ start_date }}" required></div>
+<div class="field"><label>ถึงวันที่</label><input type="date" name="end" value="{{ end_date }}" required></div>
+<div class="field"><label>ห้องเรียน</label><select name="class_id"><option value="">ทุกห้อง</option>{% for c in classes %}<option value="{{ c.id }}" {% if selected_class==c.id %}selected{% endif %}>{{ c.name }}</option>{% endfor %}</select></div>
+<div class="field"><label>รายวิชา</label><select name="subject_id"><option value="">ทุกวิชา</option>{% for s in subjects %}<option value="{{ s.id }}" {% if selected_subject==s.id %}selected{% endif %}>{{ s.name }}</option>{% endfor %}</select></div>
+<div class="field"><label>นักเรียน</label><select name="student_id"><option value="">ทุกคน</option>{% for s in students %}<option value="{{ s.id }}" {% if selected_student==s.id %}selected{% endif %}>{{ s.student_code }} · {{ s.full_name }}</option>{% endfor %}</select></div>
+<button>ค้นหา</button><a class="btn secondary" href="{{ url_for('reports_export', start=start_date, end=end_date, class_id=selected_class, subject_id=selected_subject, student_id=selected_student) }}">ดาวน์โหลด CSV / Excel</a>
+</form></div>
+<div class="card"><div class="cardhead"><h2>ผลรายงาน</h2><span class="muted">{{ rows|length }} รายการ</span></div>
+<div class="tablewrap"><table><thead><tr><th>วันที่</th><th>รหัสนักเรียน</th><th>ชื่อ–นามสกุล</th><th>ห้องเรียน</th><th>รายวิชา</th><th>สถานะ</th><th>เวลาเข้า</th><th>เวลาออก</th><th>วิธีบันทึก</th></tr></thead><tbody>
+{% for r in rows %}<tr><td>{{ r.attendance_date }}</td><td>{{ r.student_code }}</td><td>{{ r.full_name }}</td><td>{{ r.class_name or '-' }}</td><td>{{ r.subject_name or '-' }}</td><td>{{ 'มาสาย' if r.status=='late' else 'ตรงเวลา' }}</td><td>{{ r.check_in or '-' }}</td><td>{{ r.check_out or 'ยังไม่ออก' }}</td><td>{{ r.method }}</td></tr>{% else %}<tr><td colspan="9" class="empty">ไม่มีข้อมูลที่ตรงกับตัวกรอง</td></tr>{% endfor %}
+</tbody></table></div></div>
+{% endblock %}

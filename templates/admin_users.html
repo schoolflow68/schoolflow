@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}บัญชีผู้ใช้ · SchoolFlow{% endblock %}
+{% block crumb %}USER MANAGEMENT{% endblock %}
+{% block content %}
+<div class="pagehead"><div><div class="eyebrow">SECURITY</div><h1>บัญชีผู้ใช้และสิทธิ์</h1><p>บัญชีครูและผู้ดูแลระบบ · รหัสผ่านถูกเก็บในรูปแบบ hash</p></div></div>
+<div class="card"><h2>เพิ่มบัญชีผู้ใช้</h2><form method="post" class="row" style="margin-top:16px">
+<div class="field"><label>ชื่อผู้ใช้</label><input name="username" required maxlength="80"></div><div class="field"><label>รหัสผ่าน (อย่างน้อย 10 ตัวอักษร)</label><input type="password" name="password" required minlength="10"></div><div class="field"><label>สิทธิ์</label><select name="role"><option value="teacher">ครู</option><option value="admin">ผู้ดูแลระบบ</option></select></div><button>เพิ่มบัญชี</button></form></div>
+<div class="card"><h2>บัญชีที่มีอยู่</h2><div class="tablewrap" style="margin-top:14px"><table><thead><tr><th>ชื่อผู้ใช้</th><th>สิทธิ์</th><th>เปลี่ยนสิทธิ์</th></tr></thead><tbody>{% for r in rows %}<tr><td>{{ r.username }}</td><td>{{ 'ผู้ดูแลระบบ' if r.role=='admin' else 'ครู' }}</td><td><form method="post" action="{{ url_for('admin_user_role', user_id=r.id) }}" class="row"><select name="role"><option value="teacher" {% if r.role=='teacher' %}selected{% endif %}>ครู</option><option value="admin" {% if r.role=='admin' %}selected{% endif %}>ผู้ดูแลระบบ</option></select><button class="secondary">บันทึก</button></form></td></tr>{% endfor %}</tbody></table></div></div>
+{% endblock %}

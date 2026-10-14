@@ -1,0 +1,75 @@
+{% extends "base.html" %}{% block content %}
+
+<!-- Search Form -->
+<form method="GET" action="/students" style="margin-bottom: 20px;">
+    <div style="display: flex; gap: 10px;">
+        <input type="text" name="q" value="{{ search_query }}" placeholder="Search Student ID or Name..." style="flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px;">
+        <button type="submit" style="padding: 10px 20px; background-color: #4f46e5; color: white; border: none; border-radius: 6px; cursor: pointer;">Search</button>
+        {% if search_query %}
+            <a href="/students" style="padding: 10px 15px; background-color: #6b7280; color: white; text-decoration: none; border-radius: 6px; display: flex; align-items: center;">Reset</a>
+        {% endif %}
+    </div>
+</form>
+
+
+
+
+
+
+
+
+
+<h1>จัดการนักเรียน</h1><p class="muted">เพิ่มรายชื่อ กำหนดชั้นเรียน และจัดการสถานะ</p><div class="card"><form method="post" class="row"><div class="field"><label>รหัสนักเรียน *</label><input name="student_code" required></div><div class="field"><label>ชื่อ–นามสกุล *</label><input name="full_name" required></div><div class="field"><label>ชั้นเรียน</label><select name="class_id"><option value="">ไม่ระบุ</option>{% for c in classes %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select></div><div class="field"><label>หมายเหตุ</label><input name="note"></div><button>เพิ่มนักเรียน</button></form></div><div class="card"><div class="tablewrap"><table><tr><th>รหัส</th><th>ชื่อ</th><th>ชั้น</th><th>ช่องนิ้ว</th><th>สถานะ</th><th>จัดการ</th></tr>{% for s in rows %}<tr style="{{ 'opacity:.55' if not s.active else '' }}"><td>{{ s.student_code }}</td><td>{{ s.full_name }}</td><td>{{ s.class_name or '-' }}</td><td>{{ s.fingerprint_id or 'ยังไม่ลงทะเบียน' }}</td><td>{{ 'ใช้งาน' if s.active else 'ปิดใช้งาน' }}</td><td><div class="actions"><form method="post" action="{{ url_for('enroll_route',item_id=s.id) }}"><button class="success" {% if not s.active %}disabled{% endif %}>ลงทะเบียนนิ้ว*</button></form><form method="post" action="{{ url_for('toggle_student',item_id=s.id) }}"><button class="secondary">{{ 'ปิดใช้' if s.active else 'เปิดใช้' }}</button></form><form method="post" action="{{ url_for('delete_student',item_id=s.id) }}" onsubmit="return confirm('ลบนักเรียนและประวัติ?')"><button class="danger">ลบ</button></form></div></td></tr>{% else %}<tr><td colspan="6">ยังไม่มีนักเรียน</td></tr>{% endfor %}</table></div><p class="muted">*ปุ่มลงทะเบียนนิ้วจะยังไม่เขียนข้อมูลลงเซนเซอร์ จนกว่าการทดสอบ UART จะผ่านและยืนยันขั้นตอนกับรุ่น R307S ของคุณ</p></div>
+<script id="enroll-live-status-script">
+document.addEventListener("submit", async function(event) {
+  const form = event.target;
+  if (!form.matches('form[action*="/fingerprint"]')) return;
+  event.preventDefault();
+
+  let box = form.parentElement.querySelector(".enroll-live-status");
+  if (!box) {
+    box = document.createElement("div");
+    box.className = "enroll-live-status";
+    box.style.cssText = "flex:0 0 100%;padding:12px;margin:8px 0;border-radius:10px;background:#eef4ff;color:#243b70;font-weight:600";
+    form.parentElement.insertBefore(box, form.parentElement.firstChild);
+  }
+  const button = form.querySelector("button");
+  if (button) button.disabled = true;
+  box.textContent = "???????????????????...";
+
+  try {
+    const response = await fetch(form.action, {
+      method: "POST",
+      headers: {"X-Requested-With": "XMLHttpRequest"}
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || "???????????????????????");
+
+    while (true) {
+      const statusResponse = await fetch("/enrollment-status/" + data.job_id);
+      const status = await statusResponse.json();
+      box.textContent = status.message;
+      if (status.state === "success") {
+        box.style.background = "#e7f8ef";
+        box.style.color = "#16734a";
+        setTimeout(() => window.location.reload(), 1800);
+        break;
+      }
+      if (status.state === "error") {
+        box.style.background = "#fff0f0";
+        box.style.color = "#a12626";
+        if (button) button.disabled = false;
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  } catch (error) {
+    box.textContent = error.message;
+    box.style.background = "#fff0f0";
+    box.style.color = "#a12626";
+    if (button) button.disabled = false;
+  }
+});
+</script>
+
+{% endblock %}

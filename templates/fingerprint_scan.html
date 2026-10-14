@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Fingerprint Scan{% endblock %}
+{% block content %}
+<h1>Fingerprint Attendance</h1>
+<p class="muted">Scan a registered fingerprint to record student attendance.</p>
+
+{% if result %}
+<div class="card">
+  <h2>{{ 'Scan successful' if result[0] == 'success' else 'Scan result' }}</h2>
+  <p>{{ result[1] }}</p>
+</div>
+{% endif %}
+
+<div class="card">
+  <form method="post">
+    <div class="row">
+      <div class="field">
+        <label>Subject</label>
+        <select name="subject_id">
+          <option value="">No subject</option>
+          {% for s in subjects %}
+          <option value="{{ s.id }}" {% if selected_subject == s.id|string %}selected{% endif %}>
+            {{ s.name }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Attendance action</label>
+        <select name="mode">
+          <option value="in" {% if selected_mode == 'in' %}selected{% endif %}>Check in</option>
+          <option value="out" {% if selected_mode == 'out' %}selected{% endif %}>Check out</option>
+        </select>
+      </div>
+
+      <button type="submit">Start Fingerprint Scan</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <p><strong>Instructions</strong></p>
+  <ol>
+    <li>Select the subject and check-in/check-out action.</li>
+    <li>Click Start Fingerprint Scan.</li>
+    <li>Place the registered finger on the R307S sensor.</li>
+    <li>Wait for the student name and result to appear.</li>
+  </ol>
+  <p class="muted">The scan may take up to 25 seconds to detect a finger.</p>
+</div>
+{% endblock %}

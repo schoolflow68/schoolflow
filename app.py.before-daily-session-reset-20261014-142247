@@ -1,0 +1,970 @@
+import os, sqlite3, csv, io, time, threading, fcntl
+from datetime import datetime
+from functools import wraps
+from flask import Flask, g, request, redirect, url_for, session, flash, render_template, make_response, jsonify
+from werkzeug.security import generate_password_hash, check_password_hash
+
+try:
+    import serial
+except ImportError:
+    serial = None
+
+try:
+    from pyfingerprint.pyfingerprint import PyFingerprint
+except ImportError:
+    PyFingerprint = None
+
+SENSOR_LOCK = threading.Lock()
+SENSOR_LOCK_PATH = "/tmp/school-r307s-shared.lock"
+
+class SharedSensorLock:
+    def __enter__(self):
+        import fcntl
+        SENSOR_LOCK.acquire()
+        self.file = open(SENSOR_LOCK_PATH, "w")
+        try:
+            fcntl.flock(self.file, fcntl.LOCK_EX)
+        except Exception:
+            self.file.close()
+            SENSOR_LOCK.release()
+            raise
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        import fcntl
+        try:
+            fcntl.flock(self.file, fcntl.LOCK_UN)
+            self.file.close()
+        finally:
+            SENSOR_LOCK.release()
+
+shared_sensor_lock = SharedSensorLock()
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.environ.get("SCHOOL_DB_PATH", os.path.join(ROOT, "school.db"))
+SERIAL_PORT = os.environ.get("R307S_PORT", "/dev/serial0")
+SERIAL_BAUD = int(os.environ.get("R307S_BAUD", "57600"))
+app = Flask(__name__)
+app.secret_key = os.environ.get("SCHOOL_SECRET_KEY", os.urandom(32).hex())
+
+def get_db():
+    if "db" not in g:
+        g.db = sqlite3.connect(DB_PATH, timeout=10)
+        g.db.row_factory = sqlite3.Row
+        g.db.execute("PRAGMA foreign_keys=ON")
+    return g.db
+
+@app.teardown_appcontext
+def close_db(error=None):
+    conn = g.pop("db", None)
+    if conn is not None:
+        conn.close()
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS users(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS classes(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL,
+      room TEXT DEFAULT '', note TEXT DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS subjects(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+      code TEXT DEFAULT '', teacher TEXT DEFAULT '', UNIQUE(name,code)
+    );
+    CREATE TABLE IF NOT EXISTS students(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, student_code TEXT UNIQUE NOT NULL,
+      full_name TEXT NOT NULL, class_id INTEGER REFERENCES classes(id) ON DELETE SET NULL,
+      fingerprint_id INTEGER UNIQUE, active INTEGER NOT NULL DEFAULT 1, note TEXT DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS attendance(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      class_id INTEGER REFERENCES classes(id) ON DELETE SET NULL,
+      subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
+      attendance_date TEXT NOT NULL, check_in TEXT, check_out TEXT,
+      method TEXT NOT NULL DEFAULT 'manual',
+      UNIQUE(student_id, attendance_date, subject_id)
+    );
+    """)
+    if not conn.execute("SELECT id FROM users WHERE username='admin'").fetchone():
+        conn.execute("INSERT INTO users(username,password_hash) VALUES(?,?)",
+                     ("admin", generate_password_hash("ChangeMe123!")))
+    conn.commit()
+    conn.close()
+
+def login_required(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        if not session.get("user_id"):
+            return redirect(url_for("login"))
+        return fn(*args, **kwargs)
+    return wrapped
+
+def current_day():
+    return datetime.now().date().isoformat()
+
+# R307S access is serialized so web requests cannot open the UART simultaneously.
+def open_fingerprint():
+    if PyFingerprint is None:
+        raise RuntimeError("ไม่พบ pyfingerprint กรุณาติดตั้งใน school-venv ก่อน")
+    finger = PyFingerprint(SERIAL_PORT, SERIAL_BAUD, 0xFFFFFFFF, 0x00000000)
+    if not finger.verifyPassword():
+        raise RuntimeError("รหัสผ่านเซนเซอร์ไม่ถูกต้อง")
+    return finger
+
+def test_sensor():
+    with shared_sensor_lock:
+        finger = open_fingerprint()
+        return finger.getTemplateCount(), finger.getStorageCapacity()
+
+def wait_for_finger(finger, prompt, timeout=25):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if finger.readImage():
+            return
+        time.sleep(0.15)
+    raise RuntimeError(prompt + " หมดเวลา กรุณาลองใหม่")
+
+def wait_for_removal(finger, timeout=15):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not finger.readImage():
+            return
+        time.sleep(0.15)
+    raise RuntimeError("กรุณายกนิ้วออกจากเซนเซอร์แล้วลองใหม่")
+
+
+
+def ensure_scanner_settings(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS scanner_settings (
+            setting_key TEXT PRIMARY KEY,
+            setting_value TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+
+
+def save_scanner_setting(conn, key, value):
+    conn.execute(
+        """INSERT INTO scanner_settings(setting_key, setting_value)
+           VALUES(?, ?)
+           ON CONFLICT(setting_key) DO UPDATE
+           SET setting_value=excluded.setting_value""",
+        (key, str(value)),
+    )
+    conn.commit()
+
+
+@app.route("/", methods=["GET", "POST"])
+@login_required
+def dashboard():
+    conn = get_db()
+    ensure_scanner_settings(conn)
+
+    if request.method == "POST":
+        action = request.form.get("session_action", "")
+        if action == "start":
+            subject_id = request.form.get("subject_id", type=int)
+            start_time = request.form.get("start_time", "").strip()
+            grace = request.form.get("grace_minutes", type=int)
+
+            subject = conn.execute(
+                "SELECT id FROM subjects WHERE id=?", (subject_id,)
+            ).fetchone() if subject_id else None
+
+            try:
+                datetime.strptime(start_time, "%H:%M")
+                valid_time = True
+            except ValueError:
+                valid_time = False
+
+            if not subject or not valid_time or grace is None or not 0 <= grace <= 180:
+                flash("\u0e02\u0e49\u0e2d\u0e21\u0e39\u0e25\u0e44\u0e21\u0e48\u0e16\u0e39\u0e01\u0e15\u0e49\u0e2d\u0e07 \u0e01\u0e23\u0e38\u0e13\u0e32\u0e15\u0e23\u0e27\u0e08\u0e2a\u0e2d\u0e1a", "error")
+            else:
+                save_scanner_setting(conn, "active_subject_id", subject["id"])
+                save_scanner_setting(conn, "class_start_time", start_time)
+                save_scanner_setting(conn, "late_grace_minutes", grace)
+                save_scanner_setting(conn, "scan_phase", "in")
+                flash("\u0e40\u0e23\u0e34\u0e48\u0e21\u0e04\u0e32\u0e1a\u0e41\u0e25\u0e49\u0e27 \u0e19\u0e31\u0e01\u0e40\u0e23\u0e35\u0e22\u0e19\u0e2a\u0e41\u0e01\u0e19\u0e40\u0e1e\u0e37\u0e48\u0e2d\u0e1a\u0e31\u0e19\u0e17\u0e36\u0e01\u0e40\u0e27\u0e25\u0e32\u0e40\u0e02\u0e49\u0e32", "success")
+
+        elif action == "checkout":
+            save_scanner_setting(conn, "scan_phase", "out")
+            flash("\u0e40\u0e1b\u0e25\u0e35\u0e48\u0e22\u0e19\u0e40\u0e1b\u0e47\u0e19\u0e0a\u0e48\u0e27\u0e07\u0e2a\u0e41\u0e01\u0e19\u0e2d\u0e2d\u0e01\u0e41\u0e25\u0e49\u0e27", "success")
+
+        elif action == "end":
+            conn.execute("DELETE FROM scanner_settings")
+            conn.commit()
+            flash("\u0e08\u0e1a\u0e04\u0e32\u0e1a\u0e40\u0e23\u0e35\u0e22\u0e19\u0e41\u0e25\u0e49\u0e27", "success")
+
+        return redirect(url_for("dashboard"))
+
+    today = current_day()
+    stats = {
+        "students": conn.execute(
+            "SELECT COUNT(*) FROM students WHERE active=1"
+        ).fetchone()[0],
+        "classes": conn.execute("SELECT COUNT(*) FROM classes").fetchone()[0],
+        "subjects": conn.execute("SELECT COUNT(*) FROM subjects").fetchone()[0],
+        "today": conn.execute(
+            "SELECT COUNT(*) FROM attendance WHERE attendance_date=?", (today,)
+        ).fetchone()[0],
+    }
+    recent = conn.execute("""SELECT a.*,s.student_code,s.full_name,c.name AS class_name,
+        sub.name AS subject_name FROM attendance a JOIN students s ON s.id=a.student_id
+        LEFT JOIN classes c ON c.id=a.class_id LEFT JOIN subjects sub ON sub.id=a.subject_id
+        WHERE a.attendance_date=? ORDER BY a.id DESC LIMIT 10""", (today,)).fetchall()
+
+    settings = {
+        row["setting_key"]: row["setting_value"]
+        for row in conn.execute(
+            "SELECT setting_key, setting_value FROM scanner_settings"
+        ).fetchall()
+    }
+    current_subject = None
+    if settings.get("active_subject_id"):
+        current_subject = conn.execute(
+            "SELECT id, name FROM subjects WHERE id=?",
+            (int(settings["active_subject_id"]),),
+        ).fetchone()
+
+    return render_template(
+        "dashboard.html",
+        stats=stats,
+        recent=recent,
+        today=today,
+        current_subject=current_subject,
+        subject_options=conn.execute(
+            "SELECT id, name FROM subjects ORDER BY name"
+        ).fetchall(),
+        session_settings=settings,
+    )
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        user = get_db().execute("SELECT * FROM users WHERE username=?", (request.form.get("username","").strip(),)).fetchone()
+        if user and check_password_hash(user["password_hash"], request.form.get("password","")):
+            session.clear()
+            session["user_id"] = user["id"]
+            session["username"] = user["username"]
+            return redirect(url_for("dashboard"))
+        flash("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง", "error")
+    return render_template("login.html")
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+@app.route("/password", methods=["GET", "POST"])
+@login_required
+def password():
+    if request.method == "POST":
+        conn = get_db()
+        user = conn.execute("SELECT * FROM users WHERE id=?", (session["user_id"],)).fetchone()
+        old, new, confirm = request.form.get("old_password",""), request.form.get("new_password",""), request.form.get("confirm_password","")
+        if not check_password_hash(user["password_hash"], old):
+            flash("รหัสผ่านเดิมไม่ถูกต้อง", "error")
+        elif len(new) < 10:
+            flash("รหัสผ่านใหม่ต้องมีอย่างน้อย 10 ตัวอักษร", "error")
+        elif new != confirm:
+            flash("รหัสผ่านใหม่ไม่ตรงกัน", "error")
+        else:
+            conn.execute("UPDATE users SET password_hash=? WHERE id=?", (generate_password_hash(new), user["id"]))
+            conn.commit()
+            flash("เปลี่ยนรหัสผ่านแล้ว", "success")
+            return redirect(url_for("dashboard"))
+    return render_template("password.html")
+
+@app.route("/classes", methods=["GET", "POST"])
+@login_required
+def classes():
+    conn = get_db()
+    if request.method == "POST":
+        name = request.form.get("name","").strip()
+        if not name:
+            flash("กรุณากรอกชื่อชั้นเรียน", "error")
+        else:
+            try:
+                conn.execute("INSERT INTO classes(name,room,note) VALUES(?,?,?)",
+                    (name, request.form.get("room","").strip(), request.form.get("note","").strip()))
+                conn.commit()
+                flash("เพิ่มชั้นเรียนแล้ว", "success")
+            except sqlite3.IntegrityError:
+                flash("ชื่อชั้นเรียนซ้ำ", "error")
+        return redirect(url_for("classes"))
+    rows = conn.execute("""SELECT c.*,(SELECT COUNT(*) FROM students s WHERE s.class_id=c.id AND s.active=1) AS total
+        FROM classes c ORDER BY c.name""").fetchall()
+    return render_template("classes.html", rows=rows)
+
+@app.route("/classes/<int:item_id>/delete", methods=["POST"])
+@login_required
+def delete_class(item_id):
+    conn = get_db()
+    conn.execute("DELETE FROM classes WHERE id=?", (item_id,))
+    conn.commit()
+    flash("ลบชั้นเรียนแล้ว", "success")
+    return redirect(url_for("classes"))
+
+@app.route("/subjects", methods=["GET", "POST"])
+@login_required
+def subjects():
+    conn = get_db()
+    if request.method == "POST":
+        name = request.form.get("name","").strip()
+        if not name:
+            flash("กรุณากรอกชื่อวิชา", "error")
+        else:
+            try:
+                conn.execute("INSERT INTO subjects(name,code,teacher) VALUES(?,?,?)",
+                    (name, request.form.get("code","").strip(), request.form.get("teacher","").strip()))
+                conn.commit()
+                flash("เพิ่มรายวิชาแล้ว", "success")
+            except sqlite3.IntegrityError:
+                flash("รายวิชานี้มีอยู่แล้ว", "error")
+        return redirect(url_for("subjects"))
+    return render_template("subjects.html", rows=conn.execute("SELECT * FROM subjects ORDER BY name").fetchall())
+
+@app.route("/subjects/<int:item_id>/delete", methods=["POST"])
+@login_required
+def delete_subject(item_id):
+    conn = get_db()
+    conn.execute("DELETE FROM subjects WHERE id=?", (item_id,))
+    conn.commit()
+    flash("ลบรายวิชาแล้ว", "success")
+    return redirect(url_for("subjects"))
+
+@app.route("/students", methods=["GET", "POST"])
+@login_required
+def students():
+    conn = get_db()
+    if request.method == "POST":
+        code, name = request.form.get("student_code","").strip(), request.form.get("full_name","").strip()
+        if not code or not name:
+            flash("กรอกรหัสนักเรียนและชื่อให้ครบ", "error")
+        else:
+            try:
+                conn.execute("INSERT INTO students(student_code,full_name,class_id,note) VALUES(?,?,?,?)",
+                    (code, name, request.form.get("class_id") or None, request.form.get("note","").strip()))
+                conn.commit()
+                flash("เพิ่มนักเรียนแล้ว", "success")
+            except sqlite3.IntegrityError:
+                flash("รหัสนักเรียนซ้ำหรือเลือกชั้นเรียนไม่ถูกต้อง", "error")
+        return redirect(url_for("students"))
+    rows = conn.execute("""SELECT s.*,c.name AS class_name FROM students s
+        LEFT JOIN classes c ON c.id=s.class_id ORDER BY s.active DESC,s.full_name""").fetchall()
+    classes_rows = conn.execute("SELECT * FROM classes ORDER BY name").fetchall()
+    return render_template("students.html", rows=rows, classes=classes_rows)
+
+@app.route("/students/<int:item_id>/toggle", methods=["POST"])
+@login_required
+def toggle_student(item_id):
+    conn = get_db()
+    conn.execute("UPDATE students SET active=1-active WHERE id=?", (item_id,))
+    conn.commit()
+    return redirect(url_for("students"))
+
+@app.route("/students/<int:item_id>/delete", methods=["POST"])
+@login_required
+def delete_student(item_id):
+    conn = get_db()
+    student = conn.execute(
+        "SELECT id, full_name, fingerprint_id FROM students WHERE id=?",
+        (item_id,),
+    ).fetchone()
+
+    if not student:
+        flash("Student not found", "error")
+        return redirect(url_for("students"))
+
+    slot = student["fingerprint_id"]
+    if slot is not None:
+        finger = None
+        try:
+            with shared_sensor_lock:
+                finger = open_fingerprint()
+                deleted = finger.deleteTemplate(int(slot))
+                if not deleted:
+                    raise RuntimeError("Sensor did not confirm template deletion")
+        except Exception as exc:
+            flash(
+                f"Could not delete sensor slot {slot}; student record was kept: {exc}",
+                "error",
+            )
+            return redirect(url_for("students"))
+        finally:
+            if finger is not None:
+                try:
+                    finger._PyFingerprint__serial.close()
+                except Exception:
+                    pass
+
+    conn.execute("DELETE FROM students WHERE id=?", (item_id,))
+    conn.commit()
+    flash("Student and fingerprint template deleted", "success")
+    return redirect(url_for("students"))
+
+
+ENROLL_JOBS = {}
+ENROLL_JOBS_LOCK = threading.Lock()
+
+DISPLAY_STATE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "display_state.json",
+)
+DISPLAY_STATE_LOCK = threading.Lock()
+
+
+def set_display_state(state, title, message, ttl=0):
+    import json
+    payload = {
+        "state": str(state),
+        "title": str(title),
+        "message": str(message),
+        "updated_at": time.time(),
+        "ttl": int(ttl),
+    }
+    with DISPLAY_STATE_LOCK:
+        temporary = DISPLAY_STATE_PATH + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False)
+        os.replace(temporary, DISPLAY_STATE_PATH)
+
+
+
+def set_enroll_job(job_id, state, message):
+    with ENROLL_JOBS_LOCK:
+        ENROLL_JOBS[job_id] = {"state": state, "message": message}
+    set_display_state(
+        "enroll" if state == "running" else state,
+        "Fingerprint enrollment",
+        message,
+        0 if state == "running" else 8,
+    )
+
+
+def enroll_worker(item_id, job_id):
+    db = sqlite3.connect(DB_PATH, timeout=10)
+    finger = None
+    stored_slot = None
+    try:
+        student = db.execute(
+            "SELECT full_name FROM students WHERE id=? AND active=1 "
+            "AND fingerprint_id IS NULL",
+            (item_id,),
+        ).fetchone()
+        if not student:
+            raise RuntimeError("Student not found, inactive, or already enrolled")
+
+        student_name = student[0]
+        with shared_sensor_lock:
+            finger = open_fingerprint()
+
+            set_enroll_job(
+                job_id, "running",
+                "\u0e27\u0e32\u0e07\u0e19\u0e34\u0e49\u0e27\u0e1a\u0e19\u0e40\u0e0b\u0e19\u0e40\u0e0b\u0e2d\u0e23\u0e4c \u0e04\u0e23\u0e31\u0e49\u0e07\u0e17\u0e35\u0e48 1"
+            )
+            wait_for_finger(finger, "First finger scan timed out", timeout=25)
+            finger.convertImage(0x01)
+
+            position, accuracy = finger.searchTemplate()
+            if position >= 0:
+                raise RuntimeError(
+                    f"Fingerprint already exists in sensor slot {position}"
+                )
+
+            set_enroll_job(
+                job_id, "running",
+                "\u0e22\u0e01\u0e19\u0e34\u0e49\u0e27\u0e2d\u0e2d\u0e01 \u0e41\u0e25\u0e49\u0e27\u0e27\u0e32\u0e07\u0e19\u0e34\u0e49\u0e27\u0e40\u0e14\u0e34\u0e21\u0e2d\u0e35\u0e01\u0e04\u0e23\u0e31\u0e49\u0e07"
+            )
+            wait_for_removal(finger)
+
+            set_enroll_job(
+                job_id, "running",
+                "\u0e27\u0e32\u0e07\u0e19\u0e34\u0e49\u0e27\u0e40\u0e14\u0e34\u0e21\u0e1a\u0e19\u0e40\u0e0b\u0e19\u0e40\u0e0b\u0e2d\u0e23\u0e4c \u0e04\u0e23\u0e31\u0e49\u0e07\u0e17\u0e35\u0e48 2"
+            )
+            wait_for_finger(finger, "Second finger scan timed out", timeout=25)
+            finger.convertImage(0x02)
+            finger.createTemplate()
+            stored_slot = int(finger.storeTemplate())
+
+            try:
+                result = db.execute(
+                    "UPDATE students SET fingerprint_id=? "
+                    "WHERE id=? AND active=1 AND fingerprint_id IS NULL",
+                    (stored_slot, item_id),
+                )
+                if result.rowcount != 1:
+                    raise RuntimeError("Student record changed during enrollment")
+                db.commit()
+            except Exception:
+                db.rollback()
+                finger.deleteTemplate(stored_slot)
+                stored_slot = None
+                raise
+
+        set_enroll_job(
+            job_id, "success",
+            f"\u0e25\u0e07\u0e17\u0e30\u0e40\u0e1a\u0e35\u0e22\u0e19\u0e2a\u0e33\u0e40\u0e23\u0e47\u0e08: {student_name} (slot {stored_slot})"
+        )
+    except Exception as exc:
+        db.rollback()
+        set_enroll_job(
+            job_id, "error",
+            "\u0e25\u0e07\u0e17\u0e30\u0e40\u0e1a\u0e35\u0e22\u0e19\u0e44\u0e21\u0e48\u0e2a\u0e33\u0e40\u0e23\u0e47\u0e08: " + str(exc)
+        )
+    finally:
+        if finger is not None:
+            try:
+                finger._PyFingerprint__serial.close()
+            except Exception:
+                pass
+        db.close()
+
+
+@app.route("/students/<int:item_id>/fingerprint", methods=["POST"])
+@login_required
+def enroll_route(item_id):
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    conn = get_db()
+    student = conn.execute(
+        "SELECT * FROM students WHERE id=? AND active=1", (item_id,)
+    ).fetchone()
+
+    if not student:
+        message = "\u0e44\u0e21\u0e48\u0e1e\u0e1a\u0e19\u0e31\u0e01\u0e40\u0e23\u0e35\u0e22\u0e19"
+        if is_ajax:
+            return jsonify({"message": message}), 404
+        flash(message, "error")
+        return redirect(url_for("students"))
+
+    if student["fingerprint_id"] is not None:
+        message = "\u0e19\u0e31\u0e01\u0e40\u0e23\u0e35\u0e22\u0e19\u0e04\u0e19\u0e19\u0e35\u0e49\u0e25\u0e07\u0e17\u0e30\u0e40\u0e1a\u0e35\u0e22\u0e19\u0e25\u0e32\u0e22\u0e19\u0e34\u0e49\u0e27\u0e41\u0e25\u0e49\u0e27"
+        if is_ajax:
+            return jsonify({"message": message}), 400
+        flash(message, "error")
+        return redirect(url_for("students"))
+
+    job_id = os.urandom(16).hex()
+    set_enroll_job(job_id, "running", "\u0e01\u0e33\u0e25\u0e31\u0e07\u0e40\u0e23\u0e34\u0e48\u0e21\u0e25\u0e07\u0e17\u0e30\u0e40\u0e1a\u0e35\u0e22\u0e19...")
+    threading.Thread(
+        target=enroll_worker, args=(item_id, job_id), daemon=True
+    ).start()
+
+    if is_ajax:
+        return jsonify({"job_id": job_id})
+    flash("\u0e40\u0e23\u0e34\u0e48\u0e21\u0e25\u0e07\u0e17\u0e30\u0e40\u0e1a\u0e35\u0e22\u0e19\u0e41\u0e25\u0e49\u0e27", "success")
+    return redirect(url_for("students"))
+
+@app.route("/enrollment-status/<job_id>")
+@login_required
+def enrollment_status(job_id):
+    with ENROLL_JOBS_LOCK:
+        job = ENROLL_JOBS.get(job_id)
+    if job is None:
+        return jsonify({"state": "error", "message": "Status not found"}), 404
+    return jsonify(job)
+
+@app.route("/attendance", methods=["GET", "POST"])
+@login_required
+def attendance():
+    conn = get_db()
+    if request.method == "POST":
+        student_id = request.form.get("student_id", type=int)
+        subject_id = request.form.get("subject_id", type=int) or None
+        mode = request.form.get("mode", "in")
+        student = conn.execute("SELECT * FROM students WHERE id=? AND active=1", (student_id,)).fetchone()
+        if not student:
+            flash("ไม่พบนักเรียนที่ใช้งานอยู่", "error")
+            return redirect(url_for("attendance"))
+        day, clock = current_day(), datetime.now().strftime("%H:%M:%S")
+        row = conn.execute("SELECT * FROM attendance WHERE student_id=? AND attendance_date=? AND subject_id IS ?",
+                           (student_id, day, subject_id)).fetchone()
+        if mode == "out":
+            if not row or not row["check_in"]:
+                flash("ยังไม่มีเวลาเข้าเรียนวันนี้", "error")
+            elif row["check_out"]:
+                flash("บันทึกเวลาออกแล้ว", "error")
+            else:
+                conn.execute("UPDATE attendance SET check_out=? WHERE id=?", (clock, row["id"]))
+                conn.commit()
+                flash(f"บันทึกเวลาออก {student['full_name']} เวลา {clock}", "success")
+        elif row and row["check_in"]:
+            flash("นักเรียนมีเวลาเข้าเรียนแล้ววันนี้", "error")
+        else:
+            if row:
+                conn.execute("UPDATE attendance SET check_in=?,method='manual' WHERE id=?", (clock, row["id"]))
+            else:
+                conn.execute("""INSERT INTO attendance(student_id,class_id,subject_id,attendance_date,check_in,method)
+                    VALUES(?,?,?,?,?,'manual')""", (student_id, student["class_id"], subject_id, day, clock))
+            conn.commit()
+            flash(f"บันทึกเวลาเข้า {student['full_name']} เวลา {clock}", "success")
+        return redirect(url_for("attendance"))
+    date = request.args.get("date", current_day())
+    records = conn.execute("""SELECT a.*,s.student_code,s.full_name,c.name AS class_name,sub.name AS subject_name
+        FROM attendance a JOIN students s ON s.id=a.student_id LEFT JOIN classes c ON c.id=a.class_id
+        LEFT JOIN subjects sub ON sub.id=a.subject_id WHERE a.attendance_date=?
+        ORDER BY a.check_in IS NULL,a.check_in DESC,s.full_name""", (date,)).fetchall()
+    student_rows = conn.execute("SELECT * FROM students WHERE active=1 ORDER BY full_name").fetchall()
+    subject_rows = conn.execute("SELECT * FROM subjects ORDER BY name").fetchall()
+    return render_template("attendance.html", records=records, students=student_rows, subjects=subject_rows, selected_date=date)
+
+
+
+@app.route("/attendance/<int:item_id>/edit", methods=["POST"])
+@login_required
+def edit_attendance(item_id):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT attendance_date FROM attendance WHERE id=?", (item_id,)
+    ).fetchone()
+    if not row:
+        flash("Attendance record not found", "error")
+        return redirect(url_for("attendance"))
+
+    check_in = request.form.get("check_in", "").strip()
+    check_out = request.form.get("check_out", "").strip()
+    try:
+        for value in (check_in, check_out):
+            if value:
+                datetime.strptime(value, "%H:%M")
+    except ValueError:
+        flash("Invalid time", "error")
+        return redirect(url_for("attendance", date=row["attendance_date"]))
+
+    conn.execute(
+        "UPDATE attendance SET check_in=?, check_out=? WHERE id=?",
+        (check_in + ":00" if check_in else None,
+         check_out + ":00" if check_out else None, item_id),
+    )
+    conn.commit()
+    flash("Attendance time updated", "success")
+    return redirect(url_for("attendance", date=row["attendance_date"]))
+
+
+@app.route("/attendance/<int:item_id>/delete", methods=["POST"])
+@login_required
+def delete_attendance(item_id):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT attendance_date FROM attendance WHERE id=?", (item_id,)
+    ).fetchone()
+    if row:
+        conn.execute("DELETE FROM attendance WHERE id=?", (item_id,))
+        conn.commit()
+        flash("Attendance record deleted", "success")
+        return redirect(url_for("attendance", date=row["attendance_date"]))
+    flash("Attendance record not found", "error")
+    return redirect(url_for("attendance"))
+
+
+
+@app.route("/class-scan-poll", methods=["POST"])
+@login_required
+def class_scan_poll():
+    conn = get_db()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS scanner_settings (
+            setting_key TEXT PRIMARY KEY,
+            setting_value TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+
+    settings = {
+        row["setting_key"]: row["setting_value"]
+        for row in conn.execute(
+            "SELECT setting_key, setting_value FROM scanner_settings"
+        ).fetchall()
+    }
+    subject_id = settings.get("active_subject_id")
+    phase = settings.get("scan_phase")
+    if not subject_id or phase not in ("in", "out"):
+        return jsonify({"state": "idle", "message": "????????????????????"})
+
+    finger = None
+    result = {"state": "waiting", "message": "\u0e01\u0e33\u0e25\u0e31\u0e07\u0e23\u0e2d\u0e2a\u0e41\u0e01\u0e19 \u0e27\u0e32\u0e07\u0e19\u0e34\u0e49\u0e27\u0e1a\u0e19\u0e40\u0e0b\u0e47\u0e19\u0e40\u0e0b\u0e2d\u0e23\u0e4c"}
+    set_display_state("waiting", "Fingerprint scan", result["message"], 0)
+    try:
+        with shared_sensor_lock:
+            finger = open_fingerprint()
+            if not finger.readImage():
+                return jsonify(result)
+
+            finger.convertImage(0x01)
+            position, accuracy = finger.searchTemplate()
+
+            if position < 0:
+                result = {
+                    "state": "error",
+                    "message": "\u0e44\u0e21\u0e48\u0e1e\u0e1a\u0e25\u0e32\u0e22\u0e19\u0e34\u0e49\u0e27\u0e19\u0e35\u0e49\u0e43\u0e19\u0e23\u0e30\u0e1a\u0e1a",
+                }
+            else:
+                student = conn.execute(
+                    "SELECT * FROM students WHERE fingerprint_id=? AND active=1",
+                    (int(position),),
+                ).fetchone()
+                subject = conn.execute(
+                    "SELECT name FROM subjects WHERE id=?", (int(subject_id),)
+                ).fetchone()
+
+                if not student or not subject:
+                    result = {
+                        "state": "error",
+                        "message": "\u0e44\u0e21\u0e48\u0e1e\u0e1a\u0e19\u0e31\u0e01\u0e40\u0e23\u0e35\u0e22\u0e19\u0e2b\u0e23\u0e37\u0e2d\u0e27\u0e34\u0e0a\u0e32",
+                    }
+                else:
+                    columns = {
+                        row["name"]
+                        for row in conn.execute("PRAGMA table_info(attendance)")
+                    }
+                    if "attendance_status" not in columns:
+                        conn.execute(
+                            "ALTER TABLE attendance ADD COLUMN attendance_status "
+                            "TEXT NOT NULL DEFAULT 'present'"
+                        )
+
+                    now = datetime.now()
+                    day = now.date().isoformat()
+                    clock = now.strftime("%H:%M:%S")
+                    row = conn.execute(
+                        """SELECT * FROM attendance
+                           WHERE student_id=? AND attendance_date=? AND subject_id=?
+                           ORDER BY id DESC LIMIT 1""",
+                        (student["id"], day, int(subject_id)),
+                    ).fetchone()
+
+                    if phase == "in":
+                        if row and row["check_in"]:
+                            result = {
+                                "state": "info",
+                                "message": f"\u0e40\u0e02\u0e49\u0e32\u0e40\u0e23\u0e35\u0e22\u0e19\u0e41\u0e25\u0e49\u0e27: {student['full_name']}",
+                            }
+                        else:
+                            try:
+                                parts = settings["class_start_time"].split(":")
+                                grace = int(settings["late_grace_minutes"])
+                                start_minutes = int(parts[0]) * 60 + int(parts[1])
+                                current_minutes = now.hour * 60 + now.minute
+                                status = (
+                                    "late"
+                                    if current_minutes > start_minutes + grace
+                                    else "present"
+                                )
+                            except (KeyError, ValueError, IndexError):
+                                result = {
+                                    "state": "error",
+                                    "message": "\u0e15\u0e31\u0e49\u0e07\u0e40\u0e27\u0e25\u0e32\u0e04\u0e32\u0e1a\u0e2b\u0e23\u0e37\u0e2d\u0e19\u0e32\u0e17\u0e35\u0e1c\u0e48\u0e2d\u0e19\u0e1c\u0e31\u0e19\u0e44\u0e21\u0e48\u0e16\u0e39\u0e01\u0e15\u0e49\u0e2d\u0e07",
+                                }
+                                status = None
+
+                            if status:
+                                if row:
+                                    conn.execute(
+                                        """UPDATE attendance SET check_in=?,
+                                           method='fingerprint', attendance_status=?
+                                           WHERE id=?""",
+                                        (clock, status, row["id"]),
+                                    )
+                                else:
+                                    conn.execute(
+                                        """INSERT INTO attendance
+                                           (student_id,class_id,subject_id,attendance_date,
+                                            check_in,method,attendance_status)
+                                           VALUES(?,?,?,?,?,'fingerprint',?)""",
+                                        (
+                                            student["id"], student["class_id"],
+                                            int(subject_id), day, clock, status,
+                                        ),
+                                    )
+                                conn.commit()
+                                label = "\u0e2a\u0e32\u0e22" if status == "late" else "\u0e15\u0e23\u0e07\u0e40\u0e27\u0e25\u0e32"
+                                result = {
+                                    "state": "success",
+                                    "message": f"\u0e40\u0e02\u0e49\u0e32\u0e40\u0e23\u0e35\u0e22\u0e19: {student['full_name']} · {subject['name']} · {clock} · {label}",
+                                }
+
+                    elif phase == "out":
+                        if not row or not row["check_in"]:
+                            result = {
+                                "state": "error",
+                                "message": f"\u0e22\u0e31\u0e07\u0e44\u0e21\u0e48\u0e21\u0e35\u0e40\u0e27\u0e25\u0e32\u0e40\u0e02\u0e49\u0e32: {student['full_name']}",
+                            }
+                        elif row["check_out"]:
+                            result = {
+                                "state": "info",
+                                "message": f"\u0e1a\u0e31\u0e19\u0e17\u0e36\u0e01\u0e2d\u0e2d\u0e01\u0e41\u0e25\u0e49\u0e27: {student['full_name']}",
+                            }
+                        else:
+                            conn.execute(
+                                """UPDATE attendance SET check_out=?, method='fingerprint'
+                                   WHERE id=?""",
+                                (clock, row["id"]),
+                            )
+                            conn.commit()
+                            result = {
+                                "state": "success",
+                                "message": f"\u0e2d\u0e2d\u0e01\u0e08\u0e32\u0e01\u0e04\u0e32\u0e1a: {student['full_name']} · {subject['name']} · {clock}",
+                            }
+
+            # Wait for the finger to be lifted before allowing the next scan.
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                if not finger.readImage():
+                    break
+                time.sleep(0.15)
+            else:
+                while finger.readImage():
+                    time.sleep(0.25)
+
+        set_display_state(
+            result.get("state", "info"),
+            "Scan result",
+            result.get("message", ""),
+            5,
+        )
+        return jsonify(result)
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({
+            "state": "error",
+            "message": "\u0e2a\u0e41\u0e01\u0e19\u0e44\u0e21\u0e48\u0e2a\u0e33\u0e40\u0e23\u0e47\u0e08: " + str(exc),
+        }), 500
+    finally:
+        if finger is not None:
+            try:
+                finger._PyFingerprint__serial.close()
+            except Exception:
+                pass
+
+
+@app.route("/fingerprint-scan", methods=["GET", "POST"])
+@login_required
+def fingerprint_scan():
+    conn = get_db()
+    result = None
+    selected_subject = request.form.get("subject_id", "")
+    selected_mode = request.form.get("mode", "in")
+
+    if request.method == "POST":
+        subject_id = request.form.get("subject_id", type=int) or None
+        mode = request.form.get("mode", "in")
+        if mode not in ("in", "out"):
+            mode = "in"
+
+        try:
+            with shared_sensor_lock:
+                finger = open_fingerprint()
+                wait_for_finger(finger, "Place your finger on R307S", timeout=25)
+                finger.convertImage(0x01)
+                position, accuracy = finger.searchTemplate()
+
+                try:
+                    wait_for_removal(finger, timeout=10)
+                except Exception:
+                    pass
+
+            if position < 0:
+                result = ("error", "Fingerprint not registered. Enroll the student first.")
+            else:
+                student = conn.execute(
+                    "SELECT * FROM students WHERE fingerprint_id=? AND active=1",
+                    (int(position),)
+                ).fetchone()
+
+                if not student:
+                    result = ("error", f"No active student assigned to slot {position}.")
+                else:
+                    day = current_day()
+                    clock = datetime.now().strftime("%H:%M:%S")
+                    row = conn.execute(
+                        """SELECT * FROM attendance
+                           WHERE student_id=? AND attendance_date=? AND subject_id IS ?""",
+                        (student["id"], day, subject_id)
+                    ).fetchone()
+
+                    if mode == "out":
+                        if not row or not row["check_in"]:
+                            result = ("error", f"{student['full_name']} has no check-in record for this subject today.")
+                        elif row["check_out"]:
+                            result = ("error", f"{student['full_name']} already checked out at {row['check_out']}.")
+                        else:
+                            conn.execute(
+                                "UPDATE attendance SET check_out=?, method='fingerprint' WHERE id=?",
+                                (clock, row["id"])
+                            )
+                            conn.commit()
+                            result = ("success", f"Check-out recorded: {student['full_name']} at {clock}")
+                    elif row and row["check_in"]:
+                        result = ("error", f"{student['full_name']} already checked in at {row['check_in']}.")
+                    elif row:
+                        conn.execute(
+                            "UPDATE attendance SET check_in=?, method='fingerprint' WHERE id=?",
+                            (clock, row["id"])
+                        )
+                        conn.commit()
+                        result = ("success", f"Check-in recorded: {student['full_name']} at {clock}")
+                    else:
+                        conn.execute(
+                            """INSERT INTO attendance
+                               (student_id, class_id, subject_id, attendance_date, check_in, method)
+                               VALUES (?, ?, ?, ?, ?, 'fingerprint')""",
+                            (student["id"], student["class_id"], subject_id, day, clock)
+                        )
+                        conn.commit()
+                        result = ("success", f"Check-in recorded: {student['full_name']} at {clock}")
+
+        except Exception as exc:
+            conn.rollback()
+            result = ("error", f"Fingerprint scan failed: {exc}")
+
+    subjects = conn.execute("SELECT * FROM subjects ORDER BY name").fetchall()
+    conn.close()
+    return render_template(
+        "fingerprint_scan.html",
+        subjects=subjects,
+        result=result,
+        selected_subject=selected_subject,
+        selected_mode=selected_mode
+    )
+
+
+@app.route("/attendance/export")
+@login_required
+def export_attendance():
+    date = request.args.get("date", current_day())
+    rows = get_db().execute("""SELECT a.attendance_date,s.student_code,s.full_name,c.name,sub.name,
+        a.check_in,a.check_out,a.method FROM attendance a JOIN students s ON s.id=a.student_id
+        LEFT JOIN classes c ON c.id=a.class_id LEFT JOIN subjects sub ON sub.id=a.subject_id
+        WHERE a.attendance_date=? ORDER BY c.name,s.full_name""", (date,)).fetchall()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["date","student_code","full_name","class","subject","check_in","check_out","method"])
+    writer.writerows([tuple(r) for r in rows])
+    response = make_response("\ufeff" + output.getvalue())
+    response.headers["Content-Type"] = "text/csv; charset=utf-8"
+    response.headers["Content-Disposition"] = f"attachment; filename=attendance-{date}.csv"
+    return response
+
+@app.route("/sensor", methods=["GET", "POST"])
+@login_required
+def sensor():
+    result = None
+    if request.method == "POST":
+        try:
+            test_sensor()
+            result = ("success", f"เชื่อมต่อเซนเซอร์ได้ที่ {SERIAL_PORT} ({SERIAL_BAUD} baud)")
+        except Exception as exc:
+            result = ("error", f"ทดสอบไม่ผ่าน: {exc}")
+    return render_template("sensor.html", port=SERIAL_PORT, baud=SERIAL_BAUD, serial_installed=serial is not None, fingerprint_installed=PyFingerprint is not None, result=result)
+
+with app.app_context():
+    init_db()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("SCHOOL_PORT","5000")), debug=False)

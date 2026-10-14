@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}SchoolFlow · Attendance{% endblock %}</title>
+<style>
+:root{--ink:#182230;--muted:#778195;--line:#e8edf4;--bg:#f5f7fb;--white:#fff;--nav:#111b2e;--nav2:#1c2a43;--blue:#5b6cf9;--cyan:#28b7b0;--green:#16a673;--red:#e45b68;--amber:#e9a23b;--shadow:0 12px 32px rgba(27,43,72,.055)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,"Noto Sans Thai",system-ui,-apple-system,sans-serif;font-size:14px}.shell{min-height:100vh}.sidebar{position:fixed;inset:0 auto 0 0;width:246px;background:linear-gradient(165deg,var(--nav),#17263e 72%,#1d2e4a);color:#dce5f4;padding:25px 16px;display:flex;flex-direction:column;z-index:5}.brand{display:flex;align-items:center;gap:11px;padding:0 9px 30px;color:white;font-weight:800;font-size:17px;letter-spacing:.1px}.brandmark{width:38px;height:38px;border-radius:13px;background:linear-gradient(135deg,#7180ff,#42c7bf);display:grid;place-items:center;font-size:20px;box-shadow:0 8px 20px #5466e844}.brand small{display:block;font-size:10px;font-weight:500;color:#94a7c3;letter-spacing:1.8px;margin-top:2px}.navlabel{padding:8px 12px 10px;color:#7386a4;text-transform:uppercase;letter-spacing:1.5px;font-size:10px;font-weight:800}.navlinks{display:grid;gap:5px}.navlinks a{display:flex;align-items:center;gap:12px;text-decoration:none;color:#aebdd3;padding:11px 12px;border-radius:11px;font-weight:600;transition:.15s}.navlinks a .ico{width:23px;text-align:center;font-size:17px}.navlinks a:hover,.navlinks a.active{color:#fff;background:linear-gradient(100deg,#6575f4,#5668e8);box-shadow:0 7px 18px #4d5ee933}.sidebottom{margin-top:auto;border-top:1px solid #ffffff16;padding:17px 8px 0}.device{display:flex;align-items:center;gap:10px;background:#ffffff0b;border:1px solid #ffffff12;border-radius:12px;padding:12px}.dot{width:8px;height:8px;background:#28c78b;border-radius:50%;box-shadow:0 0 0 4px #28c78b20}.device b{display:block;color:#e7eef8;font-size:12px}.device span{display:block;color:#8da0bc;font-size:11px;margin-top:3px}.mainarea{margin-left:246px;min-height:100vh}.topbar{height:76px;background:#ffffffd9;backdrop-filter:blur(12px);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 34px;position:sticky;top:0;z-index:3}.crumb{color:var(--muted);font-size:12px}.welcome{font-weight:750;font-size:14px}.avatar{width:38px;height:38px;border-radius:13px;background:#edf0ff;color:#5868ec;display:grid;place-items:center;font-weight:800}.userbox{display:flex;align-items:center;gap:11px}.usertext small{display:block;color:var(--muted);font-size:11px;margin-top:3px}main{max-width:1600px;margin:0 auto;padding:30px 34px 40px}.pagehead{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:24px}.pagehead h1{font-size:25px;letter-spacing:-.5px;margin:0 0 7px;font-weight:800}.pagehead p{margin:0;color:var(--muted);font-size:13px}.eyebrow{font-size:10px;color:var(--blue);font-weight:800;text-transform:uppercase;letter-spacing:1.6px;margin-bottom:8px}.card{background:var(--white);border:1px solid var(--line);border-radius:17px;padding:22px;margin-bottom:20px;box-shadow:var(--shadow)}.cardhead{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:17px}.card h2{font-size:15px;margin:0;font-weight:800}.muted{color:var(--muted);font-size:12px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:17px}.statcard{padding:21px;position:relative;overflow:hidden}.stat-top{display:flex;justify-content:space-between;align-items:center;gap:8px}.stat-icon{width:42px;height:42px;border-radius:14px;display:grid;place-items:center;font-size:19px}.stat{font-size:31px;font-weight:850;letter-spacing:-1px;margin:16px 0 4px}.statlabel{color:var(--muted);font-size:12px}.statnote{font-size:11px;color:var(--green);margin-top:12px}.row{display:flex;align-items:end;gap:12px;flex-wrap:wrap}.field{display:flex;flex-direction:column;gap:7px;flex:1;min-width:145px}label{font-size:12px;font-weight:750;color:#475467}input,select{font:inherit;padding:11px 12px;border:1px solid #dce3ed;border-radius:10px;width:100%;background:#fff;color:var(--ink);outline:none;transition:.15s}input:focus,select:focus{border-color:#8b96ff;box-shadow:0 0 0 3px #6677ff18}button,.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;border:0;border-radius:10px;padding:11px 15px;background:var(--blue);color:white;font:inherit;font-size:12px;font-weight:750;text-decoration:none;cursor:pointer;white-space:nowrap;transition:.15s}button:hover,.btn:hover{filter:brightness(.97);transform:translateY(-1px)}button.secondary,.btn.secondary{background:#f0f3ff;color:#5666df}button.danger{background:#fff0f1;color:#c33d4d}button.success{background:#e8faf2;color:#13865c}button:disabled{opacity:.45;cursor:not-allowed}table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;padding:14px 12px;border-bottom:1px solid #edf0f5;vertical-align:middle}th{font-size:10px;color:#7b8798;background:#fafbfe;text-transform:uppercase;letter-spacing:.6px;font-weight:800}tbody tr:hover{background:#fafbff}.tablewrap{overflow:auto;border:1px solid #edf0f5;border-radius:12px}.flash{padding:13px 15px;border-radius:11px;margin-bottom:16px;background:#e8faf2;color:#14754f;border:1px solid #c8f0df}.flash.error{background:#fff0f1;color:#a32d3b;border-color:#ffd8dc}.actions{display:flex;gap:6px;flex-wrap:wrap}.pill{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border-radius:20px;font-size:10px;font-weight:800;background:#edf9f3;color:#18855d}.pill.off{background:#f1f3f6;color:#7a8494}.pill.blue{background:#eef0ff;color:#5868e7}.loginpage{margin-left:0;min-height:100vh;background:radial-gradient(circle at 15% 15%,#e9ecff,transparent 33%),var(--bg);display:grid;place-items:center;padding:20px}.loginbox{max-width:440px;width:100%;margin:0;padding:34px}.loginbrand{display:flex;align-items:center;gap:12px;margin-bottom:26px}.loginbox h1{font-size:25px;margin:0 0 8px}.loginbox form{margin-top:24px}.loginbox .field{margin-bottom:16px}.loginbox button{width:100%;padding:13px}.helper{background:#f7f8ff;border:1px solid #e8eaff;padding:13px;border-radius:11px;font-size:11px;color:#68718a;line-height:1.65}.empty{text-align:center;color:var(--muted);padding:25px}footer{text-align:center;color:#a1a9b7;font-size:10px;padding:16px}@media(max-width:1100px){.sidebar{width:205px}.mainarea{margin-left:205px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}main{padding:25px 22px}.topbar{padding:0 22px}}@media(max-width:720px){.sidebar{position:static;width:auto;padding:12px}.brand{padding:3px 8px 12px}.navlabel,.sidebottom{display:none}.navlinks{display:flex;overflow:auto;gap:5px}.navlinks a{padding:9px 11px;white-space:nowrap;font-size:11px}.navlinks a .ico{width:auto}.mainarea{margin-left:0}.topbar{height:60px;padding:0 15px}.crumb{display:none}main{padding:20px 13px}.pagehead h1{font-size:22px}.grid{gap:10px}.statcard{padding:15px}.stat{font-size:26px}.card{padding:15px;border-radius:14px}.pagehead{margin-bottom:18px}.usertext{display:none}}
+
+/* Apple-inspired visual refresh */
+:root{
+  --ink:#1d1d1f;--muted:#6e6e73;--line:#e8e8ed;--bg:#f5f5f7;
+  --white:#fff;--nav:#fbfbfd;--nav2:#f2f2f7;--blue:#0071e3;
+  --cyan:#06a7a0;--green:#16845b;--red:#d70015;
+  --amber:#bf6b00;--shadow:0 4px 20px rgba(0,0,0,.045)
+}
+body{
+  background:var(--bg);
+  color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",
+    "Noto Sans Thai",system-ui,sans-serif;
+  letter-spacing:-.01em
+}
+.sidebar{
+  background:rgba(251,251,253,.97);
+  color:var(--ink);
+  border-right:1px solid var(--line);
+  box-shadow:none;
+  backdrop-filter:blur(18px)
+}
+.brand{color:var(--ink)}
+.brand small,.device span{color:var(--muted)}
+.brandmark{border-radius:12px;box-shadow:none}
+.navlabel{color:#86868b}
+.navlinks a{color:#424245;border-radius:12px}
+.navlinks a:hover,.navlinks a.active{
+  color:var(--ink);background:#e8e8ed;box-shadow:none
+}
+.navlinks a.active{font-weight:750}
+.sidebottom{border-top-color:#e8e8ed}
+.device{background:#f5f5f7;border-color:#e8e8ed}
+.device b{color:var(--ink)}
+.mainarea{background:var(--bg)}
+.topbar{
+  background:rgba(255,255,255,.82);
+  backdrop-filter:blur(18px);
+  border-bottom-color:var(--line)
+}
+.card{
+  border:1px solid rgba(0,0,0,.055);
+  border-radius:20px;
+  box-shadow:var(--shadow)
+}
+.statcard{transition:transform .18s ease,box-shadow .18s ease}
+.statcard:hover{transform:translateY(-2px);box-shadow:0 9px 28px rgba(0,0,0,.07)}
+button,.btn{
+  background:var(--blue);
+  border-radius:12px;
+  transition:background .16s ease,transform .16s ease,box-shadow .16s ease
+}
+button:hover,.btn:hover{filter:none;background:#0077ed;box-shadow:0 4px 12px #0071e322}
+button.secondary,.btn.secondary{background:#f0f0f5;color:#06c}
+button.secondary:hover,.btn.secondary:hover{background:#e5e5ea}
+input,select{
+  border-color:#d2d2d7;
+  border-radius:12px;
+  min-height:44px
+}
+input:focus,select:focus{
+  border-color:#0071e3;
+  box-shadow:0 0 0 4px rgba(0,113,227,.13)
+}
+.tablewrap{border-color:var(--line);border-radius:15px}
+th{background:#f5f5f7;color:#6e6e73}
+tbody tr:hover{background:#fafafd}
+.flash{border-radius:13px}
+@media(max-width:720px){
+  .sidebar{background:#fbfbfd;border-bottom:1px solid var(--line)}
+  .navlinks a.active{background:#e8e8ed;color:var(--ink)}
+}
+
+
+/* APPLE_STORE_STYLE_NAV */
+.shell{min-height:100vh}
+.sidebar{
+  position:sticky;inset:auto;top:0;width:100%;height:58px;
+  overflow:visible;padding:0 max(22px,calc((100vw - 1440px)/2));
+  display:flex;flex-direction:row;align-items:center;gap:20px;
+  color:#1d1d1f;background:rgba(250,250,252,.88);
+  border:0;border-bottom:1px solid rgba(0,0,0,.09);
+  box-shadow:none;backdrop-filter:blur(22px);z-index:20
+}
+.brand{flex:none;padding:0;color:#1d1d1f;font-size:15px;gap:9px}
+.brandmark{width:30px;height:30px;border-radius:9px;box-shadow:none}
+.brand small{font-size:8px;letter-spacing:1.2px}
+.navlabel,.sidebottom{display:none!important}
+.sidebar .navlinks{
+  display:flex;align-items:center;gap:3px;min-width:0;
+  overflow-x:auto;scrollbar-width:none
+}
+.sidebar .navlinks::-webkit-scrollbar{display:none}
+.sidebar .navlinks a{
+  min-height:34px;padding:7px 9px;gap:6px;border-radius:8px;
+  color:#424245;font-size:11px;font-weight:500;white-space:nowrap
+}
+.sidebar .navlinks a .ico{width:auto;font-size:13px;color:#6e6e73}
+.sidebar .navlinks a:hover{background:#ededf0;color:#1d1d1f}
+.sidebar .navlinks a.active{background:#e8f2ff;color:#0066cc}
+.sidebar nav.navlinks:nth-of-type(2){margin-left:auto;flex:none}
+.mainarea{margin-left:0;min-height:calc(100vh - 58px)}
+.topbar{
+  position:sticky;top:58px;height:58px;padding:0 max(28px,calc((100vw - 1360px)/2));
+  background:rgba(255,255,255,.9);backdrop-filter:blur(18px);
+  border-bottom:1px solid rgba(0,0,0,.06);z-index:10
+}
+main{max-width:1440px;padding:46px 42px 58px}
+.pagehead{align-items:center;margin-bottom:34px}
+.pagehead h1{font-size:42px;letter-spacing:-1.5px;font-weight:720}
+.pagehead p{font-size:15px}
+.eyebrow{font-size:11px;letter-spacing:1.1px}
+.card{
+  padding:30px;border:1px solid rgba(0,0,0,.055);
+  border-radius:24px;box-shadow:0 4px 20px rgba(0,0,0,.035)
+}
+.card h2{font-size:19px;letter-spacing:-.4px}
+.grid{gap:18px}
+.statcard{padding:25px;border-radius:22px}
+.stat{font-size:40px;letter-spacing:-1.8px}
+button,.btn{border-radius:20px;padding:11px 18px;font-size:13px}
+button.secondary,.btn.secondary{background:#f0f0f5;color:#06c}
+input,select{min-height:48px;border-radius:13px}
+.tablewrap{border-radius:17px}
+th,td{padding:16px}
+.loginpage{margin:0}
+footer{padding:22px}
+@media(max-width:1000px){
+  .sidebar{gap:12px;padding:0 14px}
+  .brand small{display:none}
+  .sidebar .navlinks a{padding:7px;font-size:10px}
+  main{padding:34px 24px 46px}
+  .pagehead h1{font-size:35px}
+}
+@media(max-width:720px){
+  .sidebar{height:auto;min-height:54px;position:sticky;display:block;padding:9px 12px}
+  .brand{padding:0 4px 8px}
+  .sidebar .navlinks{gap:3px}
+  .sidebar .navlinks a{font-size:10px;padding:8px}
+  .sidebar nav.navlinks:nth-of-type(2){margin-left:0}
+  .topbar{top:54px;height:52px;padding:0 15px}
+  main{padding:26px 14px 38px}
+  .pagehead h1{font-size:30px}
+  .card{padding:19px;border-radius:19px}
+  .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .statcard{padding:16px}
+  .stat{font-size:30px}
+}
+
+</style></head>
+<body>
+{% if session.get('user_id') %}
+<div class="shell"><aside class="sidebar"><div class="brand"><div class="brandmark">✦</div><div>SchoolFlow<small>ATTENDANCE SUITE</small></div></div><div class="navlabel">Workspace</div><nav class="navlinks">
+<a class="{% if request.endpoint=='dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}"><span class="ico">▦</span> ภาพรวมระบบ</a>
+<a class="{% if request.endpoint in ['classes','delete_class'] %}active{% endif %}" href="{{ url_for('classes') }}"><span class="ico">▤</span> ชั้นเรียน</a>
+<a class="{% if request.endpoint in ['subjects','delete_subject'] %}active{% endif %}" href="{{ url_for('subjects') }}"><span class="ico">▧</span> รายวิชา</a>
+<a class="{% if request.endpoint in ['students','toggle_student','delete_student','enroll_route'] %}active{% endif %}" href="{{ url_for('students') }}"><span class="ico">♙</span> นักเรียน</a>
+<a class="{% if request.endpoint in ['attendance','export_attendance'] %}active{% endif %}" href="{{ url_for('attendance') }}"><span class="ico">◷</span> ประวัติเข้า–ออก</a>
+</nav><div class="navlabel" style="margin-top:19px">Settings</div><nav class="navlinks"><a class="{% if request.endpoint=='password' %}active{% endif %}" href="{{ url_for('password') }}"><span class="ico">⚙</span> ตั้งค่าบัญชี</a><a href="{{ url_for('logout') }}"><span class="ico">↪</span> ออกจากระบบ</a></nav><div class="sidebottom"><div class="device"><span class="dot"></span><div><b>Raspberry Pi 4</b><span>Fingerprint station · R307S</span></div></div></div></aside>
+<div class="mainarea"><div class="topbar"><div><div class="crumb">WORKSPACE / {% block crumb %}OVERVIEW{% endblock %}</div><div class="welcome">ระบบจัดการการเข้าเรียน</div></div><div class="userbox"><div class="usertext"><b>{{ session.get('username','ผู้ดูแลระบบ') }}</b><small>Administrator</small></div><div class="avatar">{{ (session.get('username','A')[:1])|upper }}</div></div></div><main>{% for category,message in get_flashed_messages(with_categories=true) %}<div class="flash {{ 'error' if category=='error' else '' }}">{{ message }}</div>{% endfor %}{% block content %}{% endblock %}</main><footer>SchoolFlow · Flask + SQLite · Raspberry Pi 4</footer></div></div>
+{% else %}<div class="loginpage"><main style="width:100%;max-width:480px;padding:0">{% for category,message in get_flashed_messages(with_categories=true) %}<div class="flash {{ 'error' if category=='error' else '' }}">{{ message }}</div>{% endfor %}{{ self.content() }}</main></div>{% endif %}
+</body></html>
